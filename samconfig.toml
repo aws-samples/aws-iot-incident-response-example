@@ -1,0 +1,15 @@
+version=0.1
+[default.deploy.parameters]
+ssmEngagementContact = "<SSM_CONTACT_ARN>"
+thingGroup = "all/things"
+ssmResponsePlanName = "IotResponsePlan"
+responsePlanTitle = "Critical Device Incident"
+responsePlanSummary = "IoT Device Defender Security Profile Violation"
+responsePlanImpact = 3
+iotSecurityProfileRuleName = "DeviceRuleBaseline"
+iotSecurityProfileMLName = "DeviceMLBaseline"
+authorizedTcpPorts = "22,53,443"
+authorizedUdpPorts = 90
+mlDeviceMetric = "aws:all-bytes-out"
+mlDeviceMetricName = "outboundbytes"
+mlConfidenceLevel = "HIGH"

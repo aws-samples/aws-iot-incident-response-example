@@ -1,0 +1,560 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS IoT Incident Response Example
+Metadata:
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - 
+        Label: 
+          default: "Incident Response Configuration"
+        Parameters: 
+          - ssmEngagementContact
+          - thingGroup
+          - ssmResponsePlanName
+          - responsePlanTitle
+          - responsePlanSummary
+          - responsePlanImpact
+      - 
+        Label: 
+          default: "IoT Security Profile Configuration (Rule-based)"
+        Parameters: 
+          - iotSecurityProfileRuleName
+          - authorizedTcpPorts
+          - authorizedUdpPorts
+      - 
+        Label: 
+          default: "IoT Security Profile Configuration (ML-based)"
+        Parameters: 
+          - iotSecurityProfileMLName
+          - mlDeviceMetric
+          - mlDeviceMetricName
+          - mlConfidenceLevel
+    ParameterLabels: 
+      ssmEngagementContact: 
+        default: Engagement Contact ARN
+      thingGroup: 
+        default: Thing Group
+      iotSecurityProfileRuleName: 
+        default: Security Profile Name
+      authorizedTcpPorts:
+        default: Authorized TCP Ports
+      authorizedUdpPorts: 
+        default: Authorized UDP Ports
+      iotSecurityProfileMLName: 
+        default: Security Profile Name
+      mlDeviceMetric: 
+        default: ML Device Defender Metric
+      mlDeviceMetricName: 
+        default: Name for ML Device Defender Metric
+      mlConfidenceLevel: 
+        default: ML Device Defender Metric Confidence Level
+      responsePlanTitle: 
+        default: Incident Title
+      responsePlanSummary: 
+        default: Incident Summary
+      responsePlanImpact: 
+        default: Incident impact level
+      ssmResponsePlanName: 
+        default: Response plan name
+Parameters:
+  ssmEngagementContact:
+    Type: String
+    Description: SSM Contacts ContactId for Incident Response
+  thingGroup: 
+    Type: String
+    Description: Thing group to apply response detection and workflow ("thinggroup/<name>" or leave default for ALL things)
+    Default: all/things
+    AllowedPattern: "[a-z]*/[a-z0-9]*"
+    ConstraintDescription: must contaon only alphanumeric characters in the format of "thinggroup/<name>" or "all/things"
+  ssmResponsePlanName: 
+    Type: String
+    Description: Name of SSM incident response plan
+    Default: IotResponsePlan
+  responsePlanTitle: 
+    Type: String
+    Description: Title of response plan
+    Default: Critical Device Incident
+  responsePlanSummary: 
+    Type: String
+    Description: Short summary describing incident response plan
+    Default: IoT Device Defender Security Profile Violation
+  responsePlanImpact: 
+    Type: Number
+    Description: Severity level incident using response plan should be opened as (1 being most critical, 5 being least)
+    Default: 3
+    AllowedValues: 
+      - 5
+      - 4
+      - 3
+      - 2
+      - 1
+  iotSecurityProfileRuleName: 
+    Type: String
+    Description: Unique name within account and region for rule-based Device Defender Security Profile
+    Default: DeviceRuleBaseline
+  iotSecurityProfileMLName: 
+    Type: String
+    Description: Unique name within account and region for machine learning-based Device Defender Security Profile
+    Default: DeviceMLBaseline
+  authorizedTcpPorts: 
+    Type: List<Number>
+    Description: List of allowed listening TCP ports that are a normal part of IoT device's security baseline
+    Default: 22,53,443
+  authorizedUdpPorts: 
+    Type: List<Number>
+    Description: List of allowed listening UDP ports that are a normal part of IoT device's security baseline
+    Default: 90
+  mlDeviceMetric: 
+    Type: String
+    Description: Device metric for machine learning-based anomaly detection
+    Default: "aws:all-bytes-out"
+  mlDeviceMetricName: 
+    Type: String
+    Description: Name for metric for machine learning-based anomaly detection
+    Default: "outboundbytes"
+  mlConfidenceLevel: 
+    Type: String
+    Description: Model confidence level for ML-based detection (HIGH, MEDIUM, LOW)
+    Default: "HIGH"
+    AllowedValues: 
+      - HIGH
+      - MEDIUM
+      - LOW
+Resources:
+  incidentmanagerroleB51E26DF:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ssm-incidents.amazonaws.com
+        Version: "2012-10-17"
+      Description: Permissions to execute runbook
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action: ssm:StartAutomationExecution
+                Effect: Allow
+                Resource: arn:aws:ssm:*:*:automation-definition/*
+              - Action: sts:AssumeRole
+                Effect: Allow
+                Resource: arn:aws:iam::*:role/AWS-SystemsManager-AutomationExecutionRole
+              - Action: lambda:InvokeFunction
+                Effect: Allow
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:"
+                      - Ref: AWS::Partition
+                      - ":lambda:"
+                      - Ref: AWS::Region
+                      - ":"
+                      - Ref: AWS::AccountId
+                      - :function:aws-iot-incident-containment
+            Version: "2012-10-17"
+          PolicyName: IncidentManagerExecution
+  SSMDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Content:
+        description: |
+          This document is intended as a template for an incident response runbook in [Incident Manager](https://docs.aws.amazon.com/incident-manager/latest/userguide/index.html).
+
+          For optimal use, create your own automation document by copying the contents of this runbook template and customizing it for your scenario. Then, navigate to your [Response Plan](https://console.aws.amazon.com/systems-manager/incidents/response-plans/home) and associate it with your new automation document; your runbook is automatically started when an incident is created with the associated response plan. For more information, see [Incident Manager - Runbooks](https://docs.aws.amazon.com/incident-manager/latest/userguide/runbooks.html). 
+
+          Suggested customizations include:
+          * Updating the text in each step to provide specific guidance and instructions, such as commands to run or links to relevant dashboards
+          * Automating actions before triage or diagnosis to gather additional telemetry or diagnostics using aws:executeAwsApi
+          * Automating actions in mitigation using aws:executeAutomation, aws:executeScript, or aws:invokeLambdaFunction
+        schemaVersion: "0.3"
+        mainSteps:
+          - name: Containment
+            action: aws:invokeLambdaFunction
+            maxAttempts: 2
+            timeoutSeconds: 60
+            onFailure: Abort
+            inputs:
+              FunctionName: aws-iot-incident-containment
+              Payload: '{ "violationId" : "{{automation:EXECUTION_ID}}" }'
+            description: |-
+              **Containment & Response Preparation of IoT Device Incident**
+
+              Automated function to remove IoT thing from existing group(s) and policies and place into quarantine for further analysis. 
+          - name: Analysis
+            action: aws:pause
+            inputs: {}
+            description: |
+              **Diagnosis of Security Incident for Device**  
+
+              A security incident has been detected for IoT Device
+              Thing(s) with active violations: "{{ Containment.thingsDetected }}"
+
+              The device has been placed in quarantine for further analysis. 
+
+
+              Action Items: 
+              * Determine impact
+              * Investigate collected logs in CloudWatch (see Related Items on this incident for URL to query logs)
+              * Access device through SSH and perform analysis, if required
+                * https://console.aws.amazon.com/iot/home?region=us-east-1#/open/tunnel
+              * Determine root cause
+              * Identify mitigation action(s)
+              * Notify appropriate teams
+
+              * Look for recent changes to the production environment that might have caused the incident. Engage the responsible team using the **Contacts** tab of the incident.
+              * Rollback these changes if possible.
+          - name: Recovery
+            action: aws:pause
+            inputs: {}
+            description: |-
+              **Remediation and Recovery of Device**
+              * Ensure configuration issue or vulnerability to the device has been resolved
+
+              **Monitor customer impact**
+              * View the **Metrics** tab of the incident to monitor for recovery of your key performance indicators (KPIs).
+              * Update the **Impact** field in the incident when customer impact has been reduced or resolved. 
+
+              **Identify action items**  
+              * Add entries in the **Timeline** tab of the incident to record key decisions and actions taken, including temporary mitigations that might have been implemented. 
+              * Create a **Post-Incident Analysis** when the incident is closed in order to identify and track action items in [OpsCenter](https://console.aws.amazon.com/systems-manager/opsitems). 
+      DocumentFormat: YAML
+      DocumentType: Automation
+      Name: DeviceIncident
+      VersionName: Jan012021
+  SSMIncident:
+    Type: AWS::SSMIncidents::ResponsePlan
+    DependsOn: SSMDocument
+    Properties:
+      IncidentTemplate:
+        Impact: !Ref responsePlanImpact
+        Summary: !Ref responsePlanSummary
+        Title: !Ref responsePlanTitle
+      Name: !Ref ssmResponsePlanName
+      Actions:
+        - SsmAutomation:
+            DocumentName: DeviceIncident
+            RoleArn:
+              !GetAtt incidentmanagerroleB51E26DF.Arn
+      Engagements:
+        - Ref: ssmEngagementContact
+  iotmitigation254F1DB6:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+        Version: "2012-10-17"
+      Description: IoT Mitigation Action Role
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSIoTDeviceDefenderAddThingsToThingGroupMitigationAction
+        - arn:aws:iam::aws:policy/service-role/AWSIoTDeviceDefenderEnableIoTLoggingMitigationAction
+  IoTMitigationAction:
+    Type: AWS::IoT::MitigationAction
+    Properties:
+      ActionParams:
+        AddThingsToThingGroupParams:
+          OverrideDynamicGroups: true
+          ThingGroupNames:
+            - QUARANTINED
+      RoleArn:
+        Fn::GetAtt:
+          - iotmitigation254F1DB6
+          - Arn
+      ActionName: contain
+  startFunctionServiceRoleADD2F39B:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - :iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  startFunction1E51E638:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/iot-response/
+      Role:
+        Fn::GetAtt:
+          - startFunctionServiceRoleADD2F39B
+          - Arn
+      Environment:
+        Variables:
+          RESPONSE_PLAN_ARN:
+            Fn::GetAtt:
+              - SSMIncident
+              - Arn
+      FunctionName: start-iot-incident-response
+      Handler: start_iot_response.lambda_handler
+      Runtime: python3.9
+      Timeout: 120
+    DependsOn:
+      - startFunctionServiceRoleADD2F39B
+  startFunctionAllowInvokeAwsiotIncidentResponseStackTopicA13B34A8DF0A14AE:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName:
+        Fn::GetAtt:
+          - startFunction1E51E638
+          - Arn
+      Principal: sns.amazonaws.com
+      SourceArn:
+        Ref: TopicBFC7AF6E
+  startFunctionTopic7CB0943E:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      TopicArn:
+        Ref: TopicBFC7AF6E
+      Endpoint:
+        Fn::GetAtt:
+          - startFunction1E51E638
+          - Arn
+  startiotresponseCD1F67E8:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: ssm-incidents:StartIncident
+            Effect: Allow
+            Resource:
+              Fn::GetAtt:
+                - SSMIncident
+                - Arn
+          - Action: iot:DescribeThing
+            Effect: Allow
+            Resource: "*"
+        Version: "2012-10-17"
+      PolicyName: startiotresponseCD1F67E8
+      Roles:
+        - Ref: startFunctionServiceRoleADD2F39B
+  containFunctionServiceRoleEFC8781A:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - :iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  containFunctionBD5E9A5D:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambdas/iot-contain/
+      Role:
+        Fn::GetAtt:
+          - containFunctionServiceRoleEFC8781A
+          - Arn
+      Environment:
+        Variables:
+          RESPONSE_PLAN_ARN:
+            Fn::GetAtt:
+              - SSMIncident
+              - Arn
+      FunctionName: aws-iot-incident-containment
+      Handler: iot_contain.lambda_handler
+      Runtime: python3.9
+      Timeout: 120
+    DependsOn:
+      - containFunctionServiceRoleEFC8781A
+  iotcontainBACD36D2:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: iot:StartDetectMitigationActionsTask
+            Effect: Allow
+            Resource: "*"
+          - Action: iot:List*
+            Effect: Allow
+            Resource: "*"
+        Version: "2012-10-17"
+      PolicyName: iotcontainBACD36D2
+      Roles:
+        - Ref: containFunctionServiceRoleEFC8781A
+  TopicKeyB2E0C9CB:
+    Type: AWS::KMS::Key
+    Properties:
+      KeyPolicy:
+        Statement:
+          - Action: kms:*
+            Effect: Allow
+            Principal:
+              AWS:
+                Fn::Join:
+                  - ""
+                  - - "arn:"
+                    - Ref: AWS::Partition
+                    - ":iam::"
+                    - Ref: AWS::AccountId
+                    - :root
+            Resource: "*"
+        Version: "2012-10-17"
+      EnableKeyRotation: true
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+  TopicBFC7AF6E:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: IoT Device Alerts
+      KmsMasterKeyId:
+        Fn::GetAtt:
+          - TopicKeyB2E0C9CB
+          - Arn
+  iotdevicedefenderrole6DA2926E:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+        Version: "2012-10-17"
+      Description: Permissions to send SNS notifications
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action: sns:Publish
+                Effect: Allow
+                Resource:
+                  Fn::Join:
+                    - ""
+                    - - "arn:"
+                      - Ref: AWS::Partition
+                      - ":sns:*:"
+                      - Ref: AWS::AccountId
+                      - ":"
+                      - Fn::GetAtt:
+                          - TopicBFC7AF6E
+                          - TopicName
+              - Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Effect: Allow
+                Resource: "*"
+            Version: "2012-10-17"
+          PolicyName: snsNotifications
+  DeviceBaselineProfile:
+    Type: AWS::IoT::SecurityProfile
+    Properties:
+      AdditionalMetricsToRetainV2:
+        - Metric: aws:listening-tcp-ports
+      AlertTargets:
+        SNS:
+          AlertTargetArn:
+            Ref: TopicBFC7AF6E
+          RoleArn:
+            Fn::GetAtt:
+              - iotdevicedefenderrole6DA2926E
+              - Arn
+      Behaviors:
+        - Criteria:
+            ComparisonOperator: in-port-set
+            Value:
+              Ports: !Ref authorizedTcpPorts
+          Metric: aws:listening-tcp-ports
+          Name: AuthorizedTcpPorts
+        - Criteria:
+            ComparisonOperator: in-port-set
+            Value:
+              Ports: !Ref authorizedUdpPorts
+          Metric: aws:listening-udp-ports
+          Name: AuthorizedUdpPorts
+      SecurityProfileDescription: Rule-based security baseline for IoT devices
+      SecurityProfileName: DeviceRuleBaseline
+      TargetArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - ":iot:"
+              - Ref: AWS::Region
+              - ":"
+              - Ref: AWS::AccountId
+              - ":"
+              - Ref: thingGroup
+  DeviceBaselineProfileMl:
+    Type: AWS::IoT::SecurityProfile
+    Properties:
+      AlertTargets:
+        SNS:
+          AlertTargetArn:
+            Ref: TopicBFC7AF6E
+          RoleArn:
+            Fn::GetAtt:
+              - iotdevicedefenderrole6DA2926E
+              - Arn
+      Behaviors:
+        - Criteria:
+            ConsecutiveDatapointsToAlarm: 1
+            ConsecutiveDatapointsToClear: 1
+            MlDetectionConfig:
+              ConfidenceLevel: !Ref mlConfidenceLevel
+          Metric: !Ref mlDeviceMetric
+          Name: !Ref mlDeviceMetricName
+      SecurityProfileDescription: ML security profile for IoT devices
+      SecurityProfileName: DeviceMLBaseline
+      TargetArns:
+        - Fn::Join:
+            - ""
+            - - "arn:"
+              - Ref: AWS::Partition
+              - ":iot:"
+              - Ref: AWS::Region
+              - ":"
+              - Ref: AWS::AccountId
+              - ":"
+              - Ref: thingGroup
+Outputs: 
+  ssmDocumentInfo:
+    Description: SSM Document for IoT incident response
+    Value: 
+         Fn::Join:
+          - ""
+          - - "https://console.aws.amazon.com/systems-manager/documents/"
+            - Ref: SSMDocument
+            - "/description"
+  ssmResponsePlan:
+    Description: SSM Incident Manager response plan
+    Value: 
+         Fn::Join:
+          - ""
+          - - "https://console.aws.amazon.com/systems-manager/incidents/response-plans/home#/view/"
+            - Ref: AWS::AccountId
+            - "/"
+            - Ref: ssmResponsePlanName
+  ssmDeviceRuleSecurityProfile:
+    Description: Device Defender security profile (Rule-based)
+    Value: 
+         Fn::Join:
+          - ""
+          - - "https://console.aws.amazon.com/iot/home?#/dd/securityProfile/"
+            - Ref: iotSecurityProfileRuleName
+  ssmDeviceMLSecurityProfile:
+    Description: Device Defender security profile (ML)
+    Value: 
+         Fn::Join:
+          - ""
+          - - "https://console.aws.amazon.com/iot/home?#/dd/securityProfile/"
+            - Ref: iotSecurityProfileMLName
