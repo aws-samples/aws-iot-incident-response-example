@@ -1,6 +1,6 @@
 # AWS IoT Incident Response Automation Example #
 
-This example code, deployed as an AWS Serverless Application Model (SAM) template, demonstrates how to automate the response to security incidents for AWS IoT managed devices using AWS IoT Device Defender and AWS Systems Manager (SSM) Incident Manager, as described in the associated [AWS IoT Blog Post](https://aws-blogs-prod.amazon.com/iot/enable-compliance-and-mitigate-iot-risks-with-automated-incident-response/). 
+This example code, deployed as an AWS Serverless Application Model (SAM) template, demonstrates how to automate the response to security incidents for AWS IoT managed devices using AWS IoT Device Defender and AWS Systems Manager (SSM) Incident Manager, as described in the associated [AWS IoT Blog Post](https://aws.amazon.com/blogs/iot/enable-compliance-and-mitigate-iot-risks-with-automated-incident-response/). 
 
 ## Deployment Steps for Automated Solution ##
 
